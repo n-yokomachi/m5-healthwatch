@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException
 from starlette.responses import Response
 
 from catalog import load_catalog
-from coach import Coach, finish
+from coach import GUIDE, Coach, finish
 from store import Store
 from voice import REGION, synthesize, transcribe
 
@@ -84,7 +84,8 @@ def create_app():
         out = {"stage": res["stage"]}
         if req.get("type") == "talk":
             out["heard"] = req.get("text") or ""
-        out["reply"] = res["reply"]
+        # 決まった案内の文は声でだけ読み、画面には出さない。
+        out["reply"] = res["reply"].removesuffix(GUIDE)
         if "menu" in res:
             out["menu"] = res["menu"]
         out["audio"] = base64.b64encode(audio).decode()

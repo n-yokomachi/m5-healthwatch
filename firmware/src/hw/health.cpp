@@ -35,7 +35,6 @@ constexpr uint32_t BUZZ_DONE_MS = 400;  // the whole workout is over
 constexpr uint8_t SOUND_CH = 0;         // the reply and the workout sounds share one channel
 constexpr uint32_t EXIT_HOLD_MS = 1000; // both keys held this long leave for the launcher
 const char START_BODY[] = "{\"type\":\"start\"}";
-const char OPENING[] = "今日はどこを鍛える？";  // shown with "考え中…" until the agent's suggestion arrives
 
 // One request at a time. loop() leaves a job for netTask and picks up the result;
 // both sides hold netMutex while they touch these. The reply audio and the request body
@@ -78,14 +77,8 @@ uint32_t buzzUntil = 0;
 Workout wk;
 char finishId[40];  // "finish" goes out in a session of its own
 
-const char* errorText(NetErr e) {
-  switch (e) {
-    case NetErr::Wifi: return "Wi-Fiにつながってないよ";
-    case NetErr::Auth: return "ログインできなかったよ";
-    case NetErr::Parse: return "返事を読めなかったよ";
-    default: return "エージェントにつながらないよ";
-  }
-}
+// netTask logs the NetErr itself; the screen only tells Wi-Fi from the rest
+HwError errorOf(NetErr e) { return e == NetErr::Wifi ? HwError::Wifi : HwError::Cloud; }
 
 void netTask(void*) {
   bool wifiSeen = false, warmed = false;
@@ -160,7 +153,7 @@ void send(bool talk, size_t samples, const char* json, const char* session) {
   jobReady = true;
   xSemaphoreGive(netMutex);
   view.phase = HwPhase::Sending;
-  view.error = nullptr;
+  view.error = HwError::None;
 }
 
 // Applies the JSON before "audio". Returns false when it cannot be used.
@@ -235,19 +228,20 @@ void takeResult() {
   if (!have || stale) return;
   view.phase = HwPhase::Idle;
   if (view.stage == HwStage::Done) {  // the answer to "finish": only whether it was saved; its audio is not played
-    view.error = (tooBig || e != NetErr::None) ? "保存できなかったよ" : nullptr;
+    view.error = (tooBig || e != NetErr::None) ? HwError::Cloud : HwError::None;
     return;
   }
   if (tooBig) {
-    view.error = "送れる大きさを超えたよ";
+    view.error = HwError::Cloud;
     return;
   }
   if (e != NetErr::None) {  // audio that arrived before the error is not played
-    view.error = errorText(e);
+    view.error = errorOf(e);
     return;
   }
   if (!applyReply(head)) {
-    view.error = errorText(NetErr::Parse);
+    printf("hw: reply not usable\n");
+    view.error = HwError::Cloud;
     return;
   }
   started = true;
@@ -262,7 +256,7 @@ void startRecording() {
   micIdle = false;
   micOn = true;
   view.phase = HwPhase::Recording;
-  view.error = nullptr;
+  view.error = HwError::None;
 }
 
 void endMic() {
@@ -318,7 +312,8 @@ void tickWorkout(uint32_t now) {
         hwNewSessionId(finishId);
         sendFinish();
       } else {
-        view.stage = HwStage::Next;
+        view.stage = HwStage::ItemDone;
+        view.itemDoneAt = now;
       }
       break;
     }
@@ -346,7 +341,6 @@ void restart(uint32_t now) {
   menu = Menu();
   menuJson.clear();
   view = HwView();
-  view.reply = OPENING;
   started = false;
   waitingStart = true;
   waitSince = now;
@@ -384,7 +378,6 @@ bool handleChord(uint32_t now) {
 
 void hwSetup() {
   hwScreensBegin();
-  view.reply = OPENING;
   replyPcm = (int16_t*)heap_caps_malloc(REPLY_BYTES, MALLOC_CAP_SPIRAM);
   body = (uint8_t*)heap_caps_malloc(BODY_CAP, MALLOC_CAP_SPIRAM);
   loadVolume();
@@ -393,7 +386,7 @@ void hwSetup() {
     noMemory = true;
     waitingStart = false;
     view.phase = HwPhase::Idle;
-    view.error = "メモリが足りないよ";
+    view.error = HwError::Cloud;
     return;
   }
   sink = new ReplySink(replyPcm, REPLY_BYTES / sizeof(int16_t));
@@ -412,7 +405,8 @@ void hwLoop() {
   // holding blue on any screen starts the conversation over (a workout in progress is not saved)
   if (!chord && !noMemory && M5.BtnB.wasHold()) restart(now);
   // the workout screens keep the speaker running between sounds; it stops before recording or on leaving
-  bool working = view.stage == HwStage::Exercise || view.stage == HwStage::Next || view.stage == HwStage::Done;
+  bool working = view.stage == HwStage::Exercise || view.stage == HwStage::ItemDone || view.stage == HwStage::Next ||
+                 view.stage == HwStage::Done;
   if (!working && speakerOn && !M5.Speaker.isPlaying()) stopSpeaker();
   if (buzzUntil && (int32_t)(now - buzzUntil) >= 0) {
     M5.Power.setVibration(0);
@@ -424,14 +418,16 @@ void hwLoop() {
     if (view.stage == HwStage::Menu && view.phase == HwPhase::Idle && view.menu) {
       wk.begin(menu);
       view.workout = &wk;
-      view.error = nullptr;
+      view.error = HwError::None;
       startItem(now);
+    } else if (view.stage == HwStage::ItemDone) {
+      view.stage = HwStage::Next;
     } else if (view.stage == HwStage::Next) {
       startItem(now);
     }
   }
   // yellow on the done screen: send "finish" again after it failed
-  if (view.stage == HwStage::Done && view.phase == HwPhase::Idle && view.error && !chord && M5.BtnA.wasPressed()) sendFinish();
+  if (view.stage == HwStage::Done && view.phase == HwPhase::Idle && view.error != HwError::None && !chord && M5.BtnA.wasPressed()) sendFinish();
 
   // "start" waits for Wi-Fi
   if (waitingStart) {
@@ -441,7 +437,7 @@ void hwLoop() {
       printf("hw net: start sent at t %lu\n", now);
       send(false, 0, START_BODY, sessionId);
     } else if (now - waitSince > WAIT_NOTE_MS) {
-      view.error = errorText(NetErr::Wifi);
+      view.error = HwError::Wifi;
     }
   }
 
@@ -454,7 +450,7 @@ void hwLoop() {
       waitingStart = true;
       waitSince = now;
       view.phase = HwPhase::Sending;
-      view.error = nullptr;
+      view.error = HwError::None;
     }
   }
   if (view.phase == HwPhase::Recording && (!M5.BtnA.isPressed() || !micOn)) stopRecording();
@@ -471,7 +467,10 @@ void hwLoop() {
 
   updateEyes(now);
   view.now = millis();
-  if (view.phase == HwPhase::Sending) lookAt(0.5f, -0.8f);  // looking up while thinking
+  bool idle = view.phase == HwPhase::Idle;
+  if (talking && idle && !noMemory) view.yellow = started ? HwYellow::Talk : HwYellow::Retry;
+  else if (view.stage == HwStage::Done && idle && view.error != HwError::None) view.yellow = HwYellow::Retry;
+  else view.yellow = HwYellow::None;
 
   static uint32_t lastFrame = 0;
   uint32_t spent = millis() - lastFrame;

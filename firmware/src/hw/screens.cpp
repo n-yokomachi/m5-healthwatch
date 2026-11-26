@@ -1,5 +1,5 @@
-// Screens of HealthWatch. Layout follows the HealthWatch screen mock:
-// black circle, white eyes, the owner's words in light blue.
+// Screens of HealthWatch. Layout follows the HealthWatch screen mocks:
+// black circle, white eyes, the owner's words in light blue, and icons in place of explanatory text.
 #include <cmath>
 #include <vector>
 
@@ -24,6 +24,7 @@ constexpr uint16_t COL_HINT = 0xCE5A;   // light grey
 constexpr uint16_t COL_BLUE = 0x4C7F;   // the blue key
 constexpr uint16_t COL_TRACK = 0x2125;  // the unfilled part of the ring (#26262c)
 constexpr uint16_t COL_HARD = 0xFCC7;   // orange, the hard interval (#ff9a3c)
+constexpr uint16_t COL_OFF = 0x39C8;    // unlit round dots and the menu divider (#3a3a44)
 constexpr int TEXT_W = 320;             // width of wrapped text
 constexpr int LIST_W = 300;             // width of the menu list
 constexpr size_t LIST_MAX = 8;          // menu rows that fit in the circle; more rows scroll
@@ -32,14 +33,204 @@ constexpr size_t REPLY_LOOSE = 5;       // up to this many reply lines keep the 
 constexpr int DIGIT_W = 360, DIGIT_H = 130;  // canvas for the 120 px digits
 constexpr int DIGIT_BASE = 110;         // baseline in that canvas: digits (90 px above it) sit in the middle
 constexpr int RING_W = 10;              // width of the progress ring
+constexpr int RING_DONE_W = 14;         // the ring once an item is complete
+// icon sizes, as in the screen mock (466 px wide): small icons beside text, the key icons, the error icons
+constexpr int ICON = 28;
+constexpr int KEY_R = 23;
+constexpr int ERR_ICON = 64;
+constexpr int CHECK_W = 140, CHECK_H = 117;
+constexpr int DOT_R = 6, DOT_STEP = 20;  // round dots
+constexpr int GAP = 8;                   // between an icon and its text
 
 M5Canvas digitCv(&screen);
 
 int lineH() { return screen.fontHeight() + 8; }
 
+uint16_t dim(uint16_t c, float f) {
+  int r = lroundf(((c >> 11) & 31) * f), g = lroundf(((c >> 5) & 63) * f), b = lroundf((c & 31) * f);
+  return (r << 11) | (g << 5) | b;
+}
+
+// ---- icons: drawn from the mock's SVG paths, in viewBox units scaled to the size on screen ----
+
+struct Pen {
+  float x0, y0, k;
+  uint16_t c;
+  // a viewBox bw x bh drawn `size` px wide, centred on (cx, cy)
+  Pen(int cx, int cy, float size, float bw, float bh, uint16_t col) : k(size / bw), c(col) {
+    x0 = cx - bw / 2 * k;
+    y0 = cy - bh / 2 * k;
+  }
+  int X(float v) const { return lroundf(x0 + v * k); }
+  int Y(float v) const { return lroundf(y0 + v * k); }
+  void line(float ax, float ay, float bx, float by, float w) const { screen.drawWideLine(X(ax), Y(ay), X(bx), Y(by), w * k / 2, c); }
+  void arc(float cx, float cy, float r, float w, float a0, float a1) const {
+    screen.fillArc(X(cx), Y(cy), lroundf((r - w / 2) * k), lroundf((r + w / 2) * k), a0, a1, c);
+  }
+  void disc(float cx, float cy, float r) const { screen.fillSmoothCircle(X(cx), Y(cy), lroundf(r * k), c); }
+  void tri(float ax, float ay, float bx, float by, float qx, float qy) const {
+    screen.fillTriangle(X(ax), Y(ay), X(bx), Y(by), X(qx), Y(qy), c);
+  }
+};
+
+enum class Ic { Flag, Arrow, Loop, Clock, Hard, Easy };
+
+// a small icon (24 x 24 viewBox) centred on (cx, cy); Hard and Easy have their own colours
+void icon(Ic i, int cx, int cy, uint16_t col) {
+  switch (i) {
+    case Ic::Flag: {
+      Pen p(cx, cy, ICON, 24, 24, col);
+      p.line(6, 21, 6, 4, 2.2f);
+      p.line(6, 4, 17, 4, 2.2f);
+      p.line(17, 4, 14.5f, 8, 2.2f);
+      p.line(14.5f, 8, 17, 12, 2.2f);
+      p.line(17, 12, 6, 12, 2.2f);
+      break;
+    }
+    case Ic::Arrow: {
+      Pen p(cx, cy, ICON, 24, 24, col);
+      p.line(4, 12, 19, 12, 2.4f);
+      p.line(13, 6, 19, 12, 2.4f);
+      p.line(13, 18, 19, 12, 2.4f);
+      break;
+    }
+    case Ic::Loop: {  // two arcs chasing each other
+      Pen p(cx, cy, ICON, 24, 24, col);
+      p.arc(12, 12, 7, 2.4f, 180, 315);
+      p.arc(12, 12, 7, 2.4f, 0, 135);
+      p.line(17, 3, 17, 7.5f, 2.4f);
+      p.line(17, 7.5f, 12.5f, 7.5f, 2.4f);
+      p.line(7, 21, 7, 16.5f, 2.4f);
+      p.line(7, 16.5f, 11.5f, 16.5f, 2.4f);
+      break;
+    }
+    case Ic::Clock: {
+      Pen p(cx, cy, ICON, 24, 24, col);
+      p.arc(12, 12, 8.5f, 2.2f, 0, 360);
+      p.line(12, 7.5f, 12, 12, 2.2f);
+      p.line(12, 12, 15, 14, 2.2f);
+      break;
+    }
+    case Ic::Hard: {  // a flame
+      Pen p(cx, cy, ICON, 24, 24, COL_HARD);
+      p.disc(12, 15, 6);
+      p.tri(12.5f, 3, 6.2f, 14, 17.9f, 14);
+      p.tri(8.5f, 7, 6.2f, 14, 10.5f, 12);
+      break;
+    }
+    case Ic::Easy: {  // a gentle wave
+      Pen p(cx, cy, ICON, 24, 24, COL_HINT);
+      float px = 4, py = 13;
+      for (int k = 1; k <= 8; ++k) {
+        float x = 4 + 2 * k, y = 13 - 2.2f * sinf(2 * (float)M_PI * (x - 4) / 16);
+        p.line(px, py, x, y, 2.4f);
+        px = x;
+        py = y;
+      }
+      break;
+    }
+  }
+}
+
+Ic levelIcon(bool hard) { return hard ? Ic::Hard : Ic::Easy; }
+
+enum class Key { Next, Play, Mic, Retry };
+
+// a key as a round icon: blue for the blue key (next, start), yellow for the yellow key (talk, retry)
+void keyIcon(Key kind, int cx, int cy) {
+  bool yellow = kind == Key::Mic || kind == Key::Retry;
+  Pen bg(cx, cy, KEY_R * 48 / 22.0f, 48, 48, yellow ? COL_AREA : COL_BLUE);
+  bg.disc(24, 24, 22);
+  Pen p = bg;
+  p.c = yellow ? TFT_BLACK : TFT_WHITE;
+  switch (kind) {
+    case Key::Next:
+      p.line(15, 24, 33, 24, 4.5f);
+      p.line(26, 16, 34, 24, 4.5f);
+      p.line(26, 32, 34, 24, 4.5f);
+      break;
+    case Key::Play: p.tri(19, 14, 35, 24, 19, 34); break;
+    case Key::Mic:
+      screen.fillSmoothRoundRect(p.X(19), p.Y(11), lroundf(10 * p.k), lroundf(17 * p.k), lroundf(5 * p.k), p.c);
+      p.arc(24, 23, 9, 3, 0, 180);
+      p.line(24, 32, 24, 37, 3);
+      break;
+    case Key::Retry:
+      p.arc(24, 24, 10, 4, 22, 336);
+      p.line(34, 12, 34, 21, 4);
+      p.line(34, 21, 25, 21, 4);
+      break;
+  }
+}
+
+// Wi-Fi with a slash, or a cloud with an x for anything else
+void errorIcon(HwError e, int cx, int cy) {
+  Pen p(cx, cy, ERR_ICON, 48, 48, COL_ERROR);
+  if (e == HwError::Wifi) {
+    p.arc(24, 37, 26, 4, 226, 314);
+    p.arc(24, 37, 17, 4, 225, 315);
+    p.arc(24, 37, 8, 4, 220, 320);
+    p.disc(24, 38, 3);
+    p.line(8, 8, 40, 42, 4);
+    return;
+  }
+  p.arc(24.8f, 22.4f, 12, 3.5f, 200, 348);  // top
+  p.arc(13.5f, 27, 9, 3.5f, 90, 270);       // left
+  p.arc(36, 28, 8, 3.5f, -90, 90);          // right
+  p.line(14, 36, 36, 36, 3.5f);
+  p.line(20, 23, 28, 31, 3.5f);
+  p.line(28, 23, 20, 31, 3.5f);
+}
+
+// a yellow check drawn along its stroke up to `progress`, `zoom` times its full size
+void drawCheck(int cx, int cy, float progress, float zoom) {
+  if (progress <= 0) return;
+  Pen p(cx, cy, CHECK_W * zoom, 120, 100, COL_AREA);
+  const float l1 = hypotf(32, 30), l2 = hypotf(60, 66);
+  float d = progress * (l1 + l2);
+  float f1 = std::min(d / l1, 1.0f);
+  p.line(14, 52, 14 + 32 * f1, 52 + 30 * f1, 14);
+  if (d > l1) {
+    float f2 = std::min((d - l1) / l2, 1.0f);
+    p.line(46, 82, 46 + 60 * f2, 82 - 66 * f2, 14);
+  }
+}
+
+// one dot per round, lit up to `on`
+void drawDots(int n, int on, int cy) {
+  int x = CX - (n - 1) * DOT_STEP / 2;
+  for (int i = 0; i < n; ++i) screen.fillSmoothCircle(x + i * DOT_STEP, cy, DOT_R, i < on ? COL_AREA : COL_OFF);
+}
+
+// three dots that light up in turn while the agent thinks
+void drawThinking(int cy, uint32_t now) {
+  for (int i = 0; i < 3; ++i) {
+    float u = ((now + 1200 - i * 200) % 1200) / 1200.0f;
+    float o = u < 0.4f ? 0.3f + 0.7f * u / 0.4f : 1 - 0.7f * (u - 0.4f) / 0.6f;
+    screen.fillSmoothCircle(CX + (i - 1) * DOT_STEP, cy, DOT_R, dim(TFT_WHITE, o));
+  }
+}
+
+// ---- text ----
+
 void centered(const String& s, int y, uint16_t color) {
   screen.setTextColor(color);
   drawLine(screen, s, CX - lineWidth(screen, s) / 2, y, color);
+}
+
+// icons then text, centred as one row on a text line starting at y
+void iconRow(std::initializer_list<Ic> ics, const String& text, int y, uint16_t color) {
+  int tw = text.length() ? lineWidth(screen, text) : 0;
+  int w = ics.size() * (ICON + GAP) + tw - (tw ? 0 : GAP);
+  int x = CX - w / 2, cy = y + screen.fontHeight() / 2;
+  for (Ic i : ics) {
+    icon(i, x + ICON / 2, cy, color);
+    x += ICON + GAP;
+  }
+  if (tw) {
+    screen.setTextColor(color);
+    drawLine(screen, text, x, y, color);
+  }
 }
 
 void wrapped(const String& s, size_t maxLines, std::vector<String>& out) {
@@ -64,35 +255,59 @@ int drawLines(const std::vector<String>& lines, int y, uint16_t color, int lh = 
   return y;
 }
 
-// The line under the main content while recording, on an error, or while waiting
-// for the agent. Returns false when none of these applies.
-bool drawStatus(const HwView& v, int y) {
-  if (v.phase == HwPhase::Recording) {
-    drawLevel(y + 4);
-    centered("聞き取り中", y + 18, COL_LABEL);
-  } else if (v.error) {
-    centered(v.error, y, COL_ERROR);
-  } else if (v.phase == HwPhase::Sending) {
-    centered("考え中…", y, TFT_WHITE);
-  } else {
-    return false;
+// ---- status: recording, thinking, or an error with what the yellow key does ----
+
+Key yellowKey(const HwView& v) { return v.yellow == HwYellow::Retry ? Key::Retry : Key::Mic; }
+
+// the error icon and the yellow key, one under the other or side by side; returns the height
+int drawError(const HwView& v, int y, bool stacked) {
+  bool key = v.yellow != HwYellow::None;
+  if (stacked) {
+    errorIcon(v.error, CX, y + ERR_ICON / 2);
+    if (key) keyIcon(yellowKey(v), CX, y + ERR_ICON + 12 + KEY_R);
+    return ERR_ICON + (key ? 12 + 2 * KEY_R : 0);
   }
-  return true;
+  int w = ERR_ICON + (key ? 16 + 2 * KEY_R : 0);
+  int x = CX - w / 2;
+  errorIcon(v.error, x + ERR_ICON / 2, y + ERR_ICON / 2);
+  if (key) keyIcon(yellowKey(v), x + ERR_ICON + 16 + KEY_R, y + ERR_ICON / 2);
+  return ERR_ICON;
 }
 
-// small eyes, the agent's suggestion, and the owner's answer
+// height of the status block, or -1 when none applies
+int statusH(const HwView& v, bool stacked) {
+  if (v.phase == HwPhase::Recording) return 20;
+  if (v.error != HwError::None) return ERR_ICON + (stacked && v.yellow != HwYellow::None ? 12 + 2 * KEY_R : 0);
+  if (v.phase == HwPhase::Sending) return 20;
+  return -1;
+}
+
+void drawStatus(const HwView& v, int y, bool stacked) {
+  if (v.phase == HwPhase::Recording) drawLevel(y + 7);
+  else if (v.error != HwError::None) drawError(v, y, stacked);
+  else if (v.phase == HwPhase::Sending) drawThinking(y + 10, v.now);
+}
+
+// small eyes, the agent's suggestion, and the owner's answer with the yellow key to talk
 void drawSuggest(const HwView& v) {
   std::vector<String> reply, heard;
   wrapped(v.reply, REPLY_MAX, reply);
   wrapped(v.heard, 2, heard);
   int lh = lineH();
   int rlh = reply.size() > REPLY_LOOSE ? screen.fontHeight() + 2 : lh;  // a long reply packs its lines
-  int below = std::max<int>(heard.size(), 1) * lh;
+  bool talk = v.yellow == HwYellow::Talk;
+  int sh = statusH(v, true);
+  int below = sh >= 0 ? sh : heard.size() * lh + (talk ? 2 * KEY_R : 0);
   int total = 24 + 22 + reply.size() * rlh + 18 + below;
   int y = CY - total / 2;
   drawEyes(CX, y + 12, 0.2f);
   y = drawLines(reply, y + 24 + 22, TFT_WHITE, rlh) + 18;
-  if (!drawStatus(v, y)) drawLines(heard, y, COL_HEARD);
+  if (sh >= 0) {
+    drawStatus(v, y, true);
+    return;
+  }
+  y = drawLines(heard, y, COL_HEARD);
+  if (talk) keyIcon(Key::Mic, CX, y + KEY_R);
 }
 
 String amount(const Item& it) {
@@ -102,44 +317,45 @@ String amount(const Item& it) {
   return sec % 60 == 0 ? String(sec / 60) + "分" : String(sec) + "秒";
 }
 
-// blue dot and "start when ready"
-void drawStartHint(int y) {
-  const String hint = "準備ができたらスタート";
-  int w = 14 + 10 + lineWidth(screen, hint);
-  int x = CX - w / 2;
-  screen.fillCircle(x + 7, y + screen.fontHeight() / 2, 7, COL_BLUE);
-  screen.setTextColor(COL_HINT);
-  drawLine(screen, hint, x + 24, y, COL_HINT);
+// the area, then the loop icon and "×N" when the items repeat
+void drawAreaRow(const Menu& m, int y) {
+  String area = m.area.c_str();
+  if (m.items.empty()) {
+    centered(area, y, COL_AREA);
+    return;
+  }
+  String times = "×" + String(m.rounds);
+  int aw = lineWidth(screen, area), tw = lineWidth(screen, times);
+  int x = CX - (aw + GAP + ICON + GAP + tw) / 2;
+  screen.setTextColor(COL_AREA);
+  drawLine(screen, area, x, y, COL_AREA);
+  x += aw + GAP;
+  icon(Ic::Loop, x + ICON / 2, y + screen.fontHeight() / 2, COL_AREA);
+  x += ICON + GAP;
+  drawLine(screen, times, x, y, COL_AREA);
 }
 
-// "area  N周", or the area alone when there is nothing to repeat
-String areaLine(const Menu& m) {
-  String a = m.area.c_str();
-  return m.items.empty() ? a : a + "　" + String(m.rounds) + "周";
-}
-
-// the list rows: the items, then "最後に" (nullptr) and the items done once at the end
+// the list rows: the items, then the items done once at the end
 std::vector<const Item*> menuRows(const Menu& m) {
   std::vector<const Item*> all;
   for (auto& it : m.items) all.push_back(&it);
-  if (!m.after.empty()) {
-    if (!m.items.empty()) all.push_back(nullptr);
-    for (auto& it : m.after) all.push_back(&it);
-  }
+  for (auto& it : m.after) all.push_back(&it);
   return all;
 }
 
-// area and rounds, the items, the items done once at the end under "最後に", and "start when ready".
-// Past LIST_MAX rows the list scrolls by v.scroll pixels inside a LIST_MAX-row window, with a bar beside it.
+// area and rounds, the items, a line and the items done once at the end (each with a flag), and the
+// blue start key. Past LIST_MAX rows the list scrolls by v.scroll pixels inside a LIST_MAX-row window,
+// with a bar beside it.
 void drawMenu(const HwView& v) {
   const Menu& m = *v.menu;
   std::vector<const Item*> all = menuRows(m);
   size_t rows = std::min(all.size(), LIST_MAX);
   int lh = lineH();
   int listH = rows * lh;
-  int total = lh + 14 + listH + 18 + lh;
+  int sh = statusH(v, false);
+  int total = lh + 14 + listH + 18 + (sh >= 0 ? sh : 2 * KEY_R);
   int y = CY - total / 2;
-  centered(areaLine(m), y, COL_AREA);
+  drawAreaRow(m, y);
   y += lh + 14;
   int left = CX - LIST_W / 2, right = CX + LIST_W / 2;
   int fullH = all.size() * lh;
@@ -149,15 +365,17 @@ void drawMenu(const HwView& v) {
     int ry = y + i * lh - scroll;
     if (ry + lh <= y || ry >= y + listH) continue;
     const Item* it = all[i];
-    if (!it) {
-      screen.setTextColor(COL_LABEL);
-      drawLine(screen, "最後に", left, ry, COL_LABEL);
-    } else {
-      String a = amount(*it);
-      screen.setTextColor(TFT_WHITE);
-      drawLine(screen, String(it->name.c_str()), left, ry, TFT_WHITE);
-      drawLine(screen, a, right - lineWidth(screen, a), ry, TFT_WHITE);
+    bool after = i >= m.items.size();
+    if (after && i == m.items.size() && i > 0) screen.drawFastHLine(left, ry - 4, LIST_W, COL_OFF);
+    int nx = left;
+    if (after) {
+      icon(Ic::Flag, left + ICON / 2, ry + screen.fontHeight() / 2, COL_LABEL);
+      nx += ICON + 4;
     }
+    String a = amount(*it);
+    screen.setTextColor(TFT_WHITE);
+    drawLine(screen, String(it->name.c_str()), nx, ry, TFT_WHITE);
+    drawLine(screen, a, right - lineWidth(screen, a), ry, TFT_WHITE);
   }
   screen.clearClipRect();
   if (fullH > listH) {
@@ -168,8 +386,8 @@ void drawMenu(const HwView& v) {
     screen.fillRoundRect(barX, ty, 4, thumb, 2, COL_HINT);
   }
   y += listH + 18;
-  if (drawStatus(v, y)) return;
-  drawStartHint(y);
+  if (sh >= 0) drawStatus(v, y, false);
+  else keyIcon(Key::Play, CX, y + KEY_R);
 }
 
 // ---- workout ----
@@ -191,19 +409,31 @@ void drawBig(const String& s, int x, int cy, uint16_t color) {
 #endif
 }
 
+// a big number centred on (cx, cy) at `zoom` times its size (only with the digit font)
+void drawBigZoom(const String& s, int cx, int cy, float zoom) {
+#if HW_HAVE_DIGITS
+  if (zoom < 0.05f) return;
+  digitCv.fillScreen(TFT_BLACK);
+  digitCv.setTextColor(TFT_WHITE);
+  digitCv.drawString(s, 0, DIGIT_BASE);
+  digitCv.setPivot(digitCv.textWidth(s) / 2.0f, DIGIT_BASE - 45);
+  digitCv.pushRotateZoom(&screen, cx, cy, 0, zoom, zoom, TFT_BLACK);
+#endif
+}
+
 // the outer ring, filled clockwise from the top
-void drawRing(float f, uint16_t color) {
+void drawRing(float f, uint16_t color, int width = RING_W) {
   int r = std::min(W, H) / 2 - 1 - RING_W;
-  screen.fillCircle(CX, CY, r + RING_W / 2, COL_TRACK);
-  screen.fillCircle(CX, CY, r - RING_W / 2, TFT_BLACK);
+  screen.fillCircle(CX, CY, r + width / 2, COL_TRACK);
+  screen.fillCircle(CX, CY, r - width / 2, TFT_BLACK);
   if (f <= 0) return;
   f = std::min(f, 1.0f);
   float end = -90 + 360 * f;
-  screen.fillArc(CX, CY, r - RING_W / 2, r + RING_W / 2, -90, end, color);
+  screen.fillArc(CX, CY, r - width / 2, r + width / 2, -90, end, color);
   // round ends
   float a = end * (float)M_PI / 180;
-  screen.fillCircle(CX, CY - r, RING_W / 2, color);
-  screen.fillCircle(CX + lroundf(r * cosf(a)), CY + lroundf(r * sinf(a)), RING_W / 2, color);
+  screen.fillCircle(CX, CY - r, width / 2, color);
+  screen.fillCircle(CX + lroundf(r * cosf(a)), CY + lroundf(r * sinf(a)), width / 2, color);
 }
 
 const Item& itemAt(const Menu& m, const Step& s) { return s.after ? m.after[s.item] : m.items[s.item]; }
@@ -215,6 +445,13 @@ String mmss(uint32_t ms, bool pad) {
   return b;
 }
 
+// the round as dots, or a flag for the items done once at the end, on a text line starting at y
+void drawRound(const Menu& m, bool after, uint16_t round, int y) {
+  int cy = y + screen.fontHeight() / 2;
+  if (after) icon(Ic::Flag, CX, cy, COL_LABEL);
+  else drawDots(m.rounds, round + 1, cy);
+}
+
 // round, item name, the count and the target, the next item, and the ring
 void drawReps(const HwView& v, const Item& it) {
   const Workout& w = *v.workout;
@@ -222,7 +459,7 @@ void drawReps(const HwView& v, const Item& it) {
   int lh = lineH(), bh = bigH();
   int total = lh + lh + 8 + bh + 8 + lh;
   int y = CY - total / 2;
-  centered(w.inAfter() ? String("最後に") : String(w.round() + 1) + "周目", y, COL_LABEL);
+  drawRound(*v.menu, w.inAfter(), w.round(), y);
   centered(String(it.name.c_str()), y + lh, TFT_WHITE);
   String n = String(w.count());
   String target = "/ " + String(it.reps);
@@ -235,8 +472,9 @@ void drawReps(const HwView& v, const Item& it) {
   screen.setTextColor(COL_LABEL);
   drawLine(screen, target, x + nw + 10, ty, COL_LABEL);
   Step s;
-  String next = w.next(s) ? "次は" + String(itemAt(*v.menu, s).name.c_str()) : String("これで終わり");
-  centered(next, y + 2 * lh + 8 + bh + 8, COL_LABEL);
+  int ny = y + 2 * lh + 8 + bh + 8;
+  if (w.next(s)) iconRow({Ic::Arrow}, String(itemAt(*v.menu, s).name.c_str()), ny, COL_LABEL);
+  else iconRow({Ic::Flag}, "", ny, COL_LABEL);
 }
 
 // item name, the interval, the time on this item, the time to the next change, and the ring
@@ -251,58 +489,108 @@ void drawTimed(const HwView& v, const Item& it) {
   bool hard = it.intervals[k].hard;
   int nth = 0;  // this interval is the nth of its level
   for (size_t i = 0; i <= k; ++i) nth += it.intervals[i].hard == hard;
-  String level = String(hard ? "ややきつい" : "楽") + "　" + String(nth) + "本目";
-
-  String until;
-  if (k + 1 >= it.intervals.size()) until = "終わりまで";
-  else if (it.intervals[k + 1].hard != hard) until = it.intervals[k + 1].hard ? "ややきつくするまで" : "楽にするまで";
-  else until = "次の区間まで";
   uint32_t left = w.remainingMs(v.now) + 999;  // counted down in whole seconds, 0:00 only at the change
-  until += " " + mmss(left, false);
 
   int lh = lineH(), bh = bigH();
   int total = lh + lh + 8 + bh + 8 + lh;
   int y = CY - total / 2;
   centered(String(it.name.c_str()), y, TFT_WHITE);
-  centered(level, y + lh, hard ? COL_HARD : COL_HINT);
+  iconRow({levelIcon(hard)}, String(nth), y + lh, hard ? COL_HARD : COL_HINT);
   String t = mmss(el, true);
   drawBig(t, CX - bigWidth(t) / 2, y + 2 * lh + 8 + bh / 2, TFT_WHITE);
-  centered(until, y + 2 * lh + 8 + bh + 8, COL_HINT);
+  // to the next interval: an arrow and that interval's level; to the end of the item: a flag
+  int uy = y + 2 * lh + 8 + bh + 8;
+  if (k + 1 >= it.intervals.size()) iconRow({Ic::Flag}, mmss(left, false), uy, COL_HINT);
+  else iconRow({Ic::Arrow, levelIcon(it.intervals[k + 1].hard)}, mmss(left, false), uy, COL_HINT);
 }
 
-// round and which item, the next item and its amount, and "start when ready"
+// The item just completed: for the first second the ring flashes twice, the count shrinks away,
+// a check is drawn and coloured particles spread out to the ring; then it stays still with the name,
+// the check and the blue key to go on.
+void drawItemDone(const HwView& v) {
+  const Workout& w = *v.workout;
+  const Item& it = w.current();  // the item stays current until the next one starts
+  uint32_t t = v.now - v.itemDoneAt;
+  uint16_t col = it.timed ? COL_HARD : COL_AREA;
+  float flash = t < 900 ? 0.675f + 0.325f * cosf(t / 900.0f * 4 * (float)M_PI) : 1;  // 1, .35, 1, .35, 1
+  drawRing(1, dim(col, flash), RING_DONE_W);
+
+  int lh = lineH();
+  int total = lh + 8 + CHECK_H + 16 + 2 * KEY_R;
+  int y = CY - total / 2;
+  centered(String(it.name.c_str()), y, TFT_WHITE);
+  int ccy = y + lh + 8 + CHECK_H / 2;
+  if (t < 300) drawBigZoom(it.timed ? mmss(w.elapsedMs(v.now), true) : String(w.count()), CX, ccy, 1 - t / 300.0f);
+  // the check pops in from 0.6 of its size over 500 ms and is drawn along its stroke from 150 to 600 ms
+  float u = std::min(t / 500.0f, 1.0f) - 1;
+  float pop = 0.6f + 0.4f * (1 + 2.70158f * u * u * u + 1.70158f * u * u);
+  drawCheck(CX, ccy, std::min(std::max((t - 150.0f) / 450, 0.0f), 1.0f), pop);
+
+  // 80 particles, the same on every frame of this completion: they slow down, fade, and vanish at the ring
+  float n = t * 0.06f;  // frames of 60 fps, as the mock's motion is defined
+  float life = 1 - 0.022f * n;
+  if (life > 0) {
+    static const uint16_t cols[] = {COL_AREA, COL_HARD, COL_BLUE, TFT_WHITE};
+    float travel = (1 - powf(0.97f, n)) / 0.03f;
+    uint32_t seed = v.itemDoneAt | 1;
+    auto rnd = [&] {
+      seed = seed * 1664525u + 1013904223u;
+      return (seed >> 8) / 16777216.0f;
+    };
+    for (int i = 0; i < 80; ++i) {
+      float a = rnd() * 2 * (float)M_PI, speed = 3 + rnd() * 4, r0 = 30 + rnd() * 30;
+      uint16_t c = cols[(int)(rnd() * 4) & 3];
+      float size = 3 + rnd() * 4;
+      float x = CX + cosf(a) * (r0 + speed * travel), py = ccy + sinf(a) * (r0 + speed * travel);
+      if (hypotf(x - CX, py - CY) > 215) continue;
+      screen.fillSmoothCircle(lroundf(x), lroundf(py), lroundf(size), dim(c, life));
+    }
+  }
+  keyIcon(Key::Next, CX, y + lh + 8 + CHECK_H + 16 + KEY_R);
+}
+
+// round and which item, the next item and its amount, and the blue start key
 void drawNext(const HwView& v) {
   const Menu& m = *v.menu;
   Step p;
   v.workout->next(p);  // the Next screen only shows while an item is left
   const Item& it = itemAt(m, p);
   int lh = lineH();
-  int total = 4 * (lh + 6) + 14 + lh;
+  int total = lh + 4 + lh + 4 + 18 + 8 + lh + 6 + lh + 14 + 2 * KEY_R;
   int y = CY - total / 2;
-  String where = p.after ? String("最後に") : String(p.round + 1) + "周目";
+  drawRound(m, p.after, p.round, y);
+  y += lh + 4;
   size_t n = p.after ? m.after.size() : m.items.size();
-  centered(where + "　" + String(p.item + 1) + " / " + String(n) + "種目", y, COL_LABEL);
-  y += lh + 6;
-  centered("次は", y, COL_HINT);
-  y += lh + 6;
+  centered(String(p.item + 1) + " / " + String(n), y, COL_LABEL);
+  y += lh + 4;
+  Pen chev(CX, y + 9, 37, 48, 24, COL_HINT);  // a small down chevron: "next is"
+  chev.line(6, 6, 24, 18, 4);
+  chev.line(24, 18, 42, 6, 4);
+  y += 18 + 8;
   centered(String(it.name.c_str()), y, TFT_WHITE);
   y += lh + 6;
   centered(amount(it), y, COL_AREA);
-  y += lh + 6 + 14;
-  drawStartHint(y);
+  y += lh + 14;
+  keyIcon(Key::Play, CX, y + KEY_R);
 }
 
-// the eyes, "well done", the area, rounds and total time, and whether saving failed
+// m:ss, or h:mm:ss from an hour
+String duration(uint32_t ms) {
+  char b[16];
+  uint32_t s = ms / 1000;
+  if (s >= 3600) snprintf(b, sizeof b, "%u:%02u:%02u", (unsigned)(s / 3600), (unsigned)(s / 60 % 60), (unsigned)(s % 60));
+  else snprintf(b, sizeof b, "%u:%02u", (unsigned)(s / 60), (unsigned)(s % 60));
+  return b;
+}
+
+// the eyes, the area and rounds, the total time, and the error with the retry key when saving failed
 void drawDone(const HwView& v) {
-  uint32_t s = v.workout->totalMs() / 1000;
-  String total = s >= 60 ? String(s / 60) + "分" + String(s % 60) + "秒" : String(s) + "秒";
-  String summary = areaLine(*v.menu) + "　" + total;
   drawEyes(CX, CY - 75, 0.7f);
   int y = CY - 10;
-  centered("おつかれさま！", y, TFT_WHITE);
+  drawAreaRow(*v.menu, y);
   y += lineH() + 10;
-  centered(summary, y, COL_HINT);
-  if (v.error) centered(v.error, y + lineH() + 10, COL_ERROR);
+  iconRow({Ic::Clock}, duration(v.workout->totalMs()), y, COL_HINT);
+  if (v.error != HwError::None) drawError(v, y + lineH() + 14, false);
 }
 
 void drawWorkout(const HwView& v) {
@@ -337,6 +625,7 @@ void hwDraw(const HwView& v) {
       if (v.menu) drawMenu(v);
       break;
     case HwStage::Exercise: drawWorkout(v); break;
+    case HwStage::ItemDone: drawItemDone(v); break;
     case HwStage::Next: drawNext(v); break;
     case HwStage::Done: drawDone(v); break;
   }

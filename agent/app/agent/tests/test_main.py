@@ -51,7 +51,7 @@ def test_audio_is_last_key(client, stub_voice):
 
 def test_empty_transcript_is_heard_as_empty(client, stub_voice):
     r = client.post("/invocations", json={"type": "talk", "audio": base64.b64encode(b"\0" * 10).decode()}).json()
-    assert r["heard"] == "" and r["reply"] == "今日はどこを鍛える？" + GUIDE and r["audio"] == "AAA="
+    assert r["heard"] == "" and r["reply"] == "今日はどこを鍛える？" and r["audio"] == "AAA="
 
 
 def test_finish_does_not_build_session_coach(client, stub_voice, monkeypatch):
