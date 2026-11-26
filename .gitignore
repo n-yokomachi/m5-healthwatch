@@ -1,0 +1,27 @@
+# secrets and personal settings
+.env
+firmware/src/env_config.h
+
+# build output
+.pio/
+.vscode/
+__pycache__/
+menu/.pio/
+menu/components/
+menu/managed_components/
+menu/build/
+menu/sdkconfig.m5stack-stopwatch.old
+
+# the fonts and voice clips are generated locally (see README)
+firmware/fonts/
+firmware/src/font_noto.h
+firmware/src/hw/clips.h
+firmware/src/hw/font_digits.h
+
+# HealthWatch agent
+agent/app/agent/catalog.json
+agent/agentcore/.env.local
+agent/**/.venv/
+agent/agentcore/cdk/cdk.out/
+agent/infra/cdk.out/
+agent/tools/out/

@@ -1,0 +1,38 @@
+{
+  "name": "HealthWatch",
+  "version": 2,
+  "managedBy": "CDK",
+  "runtimes": [
+    {
+      "name": "agent",
+      "build": "CodeZip",
+      "modelProvider": "Bedrock",
+      "entrypoint": "main.py",
+      "codeLocation": "app/agent",
+      "runtimeVersion": "PYTHON_3_14",
+      "protocol": "HTTP",
+      "envVars": [
+        {
+          "name": "TABLE_NAME",
+          "value": "HealthWatch"
+        },
+        {
+          "name": "MODEL_ID",
+          "value": "jp.amazon.nova-2-lite-v1:0"
+        }
+      ],
+      "additionalPolicies": [
+        "../../agentcore/agent-policy.json"
+      ],
+      "authorizerType": "CUSTOM_JWT",
+      "authorizerConfiguration": {
+        "customJwtAuthorizer": {
+          "discoveryUrl": "https://cognito-idp.ap-northeast-1.amazonaws.com/<user-pool-id>/.well-known/openid-configuration",
+          "allowedClients": [
+            "<user-pool-client-id>"
+          ]
+        }
+      }
+    }
+  ]
+}

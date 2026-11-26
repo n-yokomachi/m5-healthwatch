@@ -1,0 +1,8 @@
+{"guide": "3周",
+ "exercises": [
+  {"name": "スクワット", "area": "脚", "kind": "reps", "sides": false, "guide": "15回"},
+  {"name": "リバースランジ", "area": "脚", "kind": "reps", "sides": true, "guide": "左右10回ずつ"},
+  {"name": "腕立て伏せ", "area": "上半身と体幹", "kind": "reps", "sides": false, "guide": "10回"},
+  {"name": "クランチ", "area": "上半身と体幹", "kind": "reps", "sides": false, "guide": "15回"},
+  {"name": "エアロバイク", "area": "有酸素", "kind": "time", "sides": false, "guide": "周回の後に1回、ややきつい2分と楽1分の繰り返しで15分"}
+]}
